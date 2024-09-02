@@ -16,7 +16,7 @@ Pair :: struct {
 Closure :: struct {
 	body, env: ^Obj,
 }
-Primitive :: proc(env: ^Obj, allocator := context.allocator)
+Primitive :: proc(env: Obj)
 
 Obj :: union {
 	Nil,
@@ -30,67 +30,77 @@ Obj :: union {
 State :: struct {
 	input:          string, // input data string used by read()
 	pos:            u64, // input data position used by read()
-	nil:            ^Obj, // nil: ()
-	read_stack:     ^Obj, // defered obj to emit from read
+	nil:            Obj, // nil: ()
+	read_stack:     Obj, // defered obj to emit from read
 
 	// Atoms
-	interned_atoms: ^Obj, // interned atoms list
-	atom_true:      ^Obj, // atom: t
-	atom_quote:     ^Obj, // atom: quote
-	atom_push:      ^Obj, // atom: push
-	atom_pop:       ^Obj, // atom: pop
+	interned_atoms: Obj, // interned atoms list
+	atom_true:      Obj, // atom: t
+	atom_quote:     Obj, // atom: quote
+	atom_push:      Obj, // atom: push
+	atom_pop:       Obj, // atom: pop
 
 	// stack/env
-	stack:          ^Obj, // top-of-stack (implemented with pairs)
-	env:            ^Obj, // top-level / initial environment
+	stack:          Obj, // top-of-stack (implemented with pairs)
+	env:            Obj, // top-level / initial environment
 }
 
 state: State
 
-nil_new :: proc(allocator := context.allocator) -> ^Obj {
-	o := new(Obj, allocator)
-	o^ = Nil(true)
-	return o
+nil_new :: proc() -> Obj {
+	return Nil(true)
 }
 
-atom_new :: proc(str: string, allocator := context.allocator) -> ^Obj {
-	o := new(Obj, allocator)
-	o^ = Atom(str)
-	return o
+atom_new :: proc(str: string) -> Obj {
+	return Atom(str)
 }
 
-number_new :: proc(n: i64, allocator := context.allocator) -> ^Obj {
-	o := new(Obj, allocator)
-	o^ = Number(n)
-	return o
+number_new :: proc(n: i64) -> Obj {
+	return Number(n)
 }
 
-pair_new :: proc(car, cdr: ^Obj, allocator := context.allocator) -> ^Obj {
-	o := new(Obj, allocator)
-	o^ = Pair{car, cdr}
-	return o
+pair_new :: proc(car, cdr: Obj) -> Obj {
+	p := Pair{new(Obj), new(Obj)}
+	p.car^ = car
+	p.cdr^ = cdr
+	return p
 }
 
-pair_destroy :: proc(p: Pair, allocator := context.allocator) {
-	obj_destroy(p.car, allocator)
-	obj_destroy(p.cdr, allocator)
+pair_destroy :: proc(p: ^Pair) {
+	if p.car != nil {
+		obj_destroy(p.car^)
+		free(p.car)
+		p.car = nil
+	}
+
+	if p.cdr != nil {
+		obj_destroy(p.cdr^)
+		free(p.cdr)
+		p.cdr = nil
+	}
 }
 
-closure_new :: proc(c: Closure, allocator := context.allocator) -> ^Obj {
-	o := new(Obj, allocator)
-	o^ = c
-	return o
+closure_new :: proc(c: Closure) -> Obj {
+	return c
 }
 
-closure_destroy :: proc(c: Closure, allocator := context.allocator) {
-	obj_destroy(c.env, allocator)
-	obj_destroy(c.body, allocator)
+closure_destroy :: proc(c: ^Closure) {
+	if true {return}
+	if c.env != nil {
+		obj_destroy(c.env^)
+		free(c.env)
+		c.env = nil
+	}
+
+	if c.body != nil {
+		obj_destroy(c.body^)
+		free(c.body)
+		c.body = nil
+	}
 }
 
-primitive_new :: proc(f: proc(env: ^^Obj, allocator := context.allocator), allocator := context.allocator) -> ^Obj {
-	o := new(Obj, allocator)
-	o^ = Primitive(f)
-	return o
+primitive_new :: proc(f: proc(env: ^Obj)) -> Obj {
+	return Primitive(f)
 }
 
 obj_new :: proc {
@@ -102,34 +112,23 @@ obj_new :: proc {
 	primitive_new,
 }
 
-obj_delete :: proc(obj: ^Obj, allocator := context.allocator) {
-	if obj == nil {
+obj_delete :: proc(obj: Obj) {
+	if obj == nil || obj == state.nil {
 		return
 	}
 
-	switch &v in obj^ {
+	switch &v in obj {
 	case Nil, Atom, Number, Primitive:
-	// nothing to delete/free except the outer obj
+	// nothing to delete/free
 	case Closure:
-		obj_destroy(v, allocator)
+	// closure_destroy(&v)
 	case Pair:
-		obj_destroy(v, allocator)
+	// pair_destroy(&v)
 	}
-}
-
-obj_free :: proc(obj: ^^Obj, allocator := context.allocator) {
-	if obj == nil || obj^ == nil{
-		return
-	}
-
-	obj_destroy(obj^, allocator)
-	free(obj^, allocator)
-	obj^ = nil
 }
 
 obj_destroy :: proc {
 	obj_delete,
-	obj_free,
 	pair_destroy,
 	closure_destroy,
 }
@@ -165,39 +164,39 @@ is :: proc(v: $V, $t: typeid) -> bool {
 	return ok
 }
 
-intern :: proc(atom_buf: string, allocator := context.allocator) -> ^Obj {
-	for list := state.interned_atoms; list != state.nil; list = list.(Pair).cdr {
+intern :: proc(atom_buf: string) -> Obj {
+	for list := state.interned_atoms; list != state.nil; list = list.(Pair).cdr^ {
 		assert_type(list, Pair, "state.interned_atoms must be Pairs")
 
 		elem := list.(Pair).car
 		assert_type(elem, Atom, "state.interned_atoms.car must be an Atom")
 		if len(atom_buf) == len(elem.(Atom)) && atom_buf == elem.(Atom) {
-			return elem
+			return elem^
 		}
 	}
 
 	// not found, create a new one and push the front of the list
-	atom := obj_new(atom_buf, allocator)
-	state.interned_atoms = obj_new(atom, state.interned_atoms, allocator)
+	atom := atom_new(atom_buf)
+	state.interned_atoms = pair_new(atom, state.interned_atoms)
 
 	return atom
 }
 
-car :: proc(obj: ^Obj) -> ^Obj {
+car :: proc(obj: Obj) -> Obj {
 	fail_type(obj, Pair, "Expected Pair to apply car() function")
-	return obj.(Pair).car
+	return obj.(Pair).car^
 }
 
-cdr :: proc(obj: ^Obj) -> ^Obj {
+cdr :: proc(obj: Obj) -> Obj {
 	fail_type(obj, Pair, "Expected Pair to apply cdr() function")
-	return obj.(Pair).cdr
+	return obj.(Pair).cdr^
 }
 
-obj_equal :: proc(a, b: ^Obj) -> bool {
+obj_equal :: proc(a, b: Obj) -> bool {
 	return a == b || (is(a, Number) && is(b, Number) && a.(Number) == b.(Number))
 }
 
-obj_i64 :: proc(a: ^Obj) -> i64 {
+obj_i64 :: proc(a: Obj) -> i64 {
 	return a.(Number) if is(a, Number) else 0
 }
 
@@ -267,7 +266,7 @@ skip_white_and_comments :: proc() {
 	}
 }
 
-read_list :: proc(allocator := context.allocator) -> ^Obj {
+read_list :: proc() -> Obj {
 	if state.read_stack == nil {
 		skip_white_and_comments()
 		c := peek()
@@ -279,15 +278,15 @@ read_list :: proc(allocator := context.allocator) -> ^Obj {
 
 	first := read()
 	second := read_list()
-	return obj_new(first, second, allocator)
+	return pair_new(first, second)
 }
 
-parse_i64 :: proc(str: string, allocator := context.allocator) -> (i64, bool) {
+parse_i64 :: proc(str: string) -> (i64, bool) {
 	i, ok := strconv.parse_int(str, 10)
 	return i64(i), ok
 }
 
-read_scalar :: proc(allocator := context.allocator) -> ^Obj {
+read_scalar :: proc() -> Obj {
 	// otherwise, assume atom or number and read it
 	start := state.pos
 	for {
@@ -302,13 +301,13 @@ read_scalar :: proc(allocator := context.allocator) -> ^Obj {
 	str := state.input[start:state.pos]
 	// is it a number?
 	if n, ok := parse_i64(str); ok {
-		return obj_new(n, allocator)
+		return number_new(n)
 	} else { 	// atom
 		return intern(str)
 	}
 }
 
-read :: proc(allocator := context.allocator) -> ^Obj {
+read :: proc() -> Obj {
 	read_stack := state.read_stack
 	if read_stack != nil {
 		state.read_stack = cdr(read_stack)
@@ -330,10 +329,10 @@ read :: proc(allocator := context.allocator) -> ^Obj {
 	// A push?
 	case '^':
 		advance()
-		s: ^Obj
-		s = obj_new(state.atom_push, s, allocator)
-		s = obj_new(read_scalar(), s, allocator)
-		s = obj_new(state.atom_quote, s, allocator)
+		s: Obj
+		s = pair_new(state.atom_push, s)
+		s = pair_new(read_scalar(), s)
+		s = pair_new(state.atom_quote, s)
 		state.read_stack = s
 
 		return read()
@@ -341,10 +340,10 @@ read :: proc(allocator := context.allocator) -> ^Obj {
 	// A pop?
 	case '$':
 		advance()
-		s: ^Obj
-		s = obj_new(state.atom_pop, s, allocator)
-		s = obj_new(read_scalar(), s, allocator)
-		s = obj_new(state.atom_quote, s, allocator)
+		s: Obj
+		s = pair_new(state.atom_pop, s)
+		s = pair_new(read_scalar(), s)
+		s = pair_new(state.atom_quote, s)
 		state.read_stack = s
 
 		return read()
@@ -363,7 +362,7 @@ read :: proc(allocator := context.allocator) -> ^Obj {
  * Print
  ******************************************************************/
 
-print_list_tail :: proc(obj: ^Obj) {
+print_list_tail :: proc(obj: Obj) {
 	if obj == state.nil {
 		fmt.print(")")
 		return
@@ -371,8 +370,8 @@ print_list_tail :: proc(obj: ^Obj) {
 
 	if is(obj, Pair) {
 		fmt.print(" ")
-		print_recurse(obj.(Pair).car)
-		print_list_tail(obj.(Pair).cdr)
+		print_recurse(obj.(Pair).car^)
+		print_list_tail(obj.(Pair).cdr^)
 		return
 	}
 
@@ -381,7 +380,7 @@ print_list_tail :: proc(obj: ^Obj) {
 	fmt.print(")")
 }
 
-print_recurse :: proc(obj: ^Obj) {
+print_recurse :: proc(obj: Obj) {
 	if obj == state.nil {
 		fmt.print("()")
 		return
@@ -392,20 +391,20 @@ print_recurse :: proc(obj: ^Obj) {
 		fmt.print(t)
 	case Pair:
 		fmt.print("(")
-		print_recurse(t.car)
-		print_list_tail(t.cdr)
+		print_recurse(t.car^)
+		print_list_tail(t.cdr^)
 
 	case Closure:
 		fmt.print("CLOSURE<")
-		print_recurse(t.body)
-		fmt.printf(", %p>", t.env)
+		print_recurse(t.body^)
+		fmt.printf(", %p>", t.env^)
 
 	case Primitive:
 		fmt.printf("PRIM<%p>", t)
 	}
 }
 
-print :: proc(obj: ^Obj) {
+print :: proc(obj: Obj) {
 	print_recurse(obj)
 	fmt.println()
 }
@@ -416,11 +415,11 @@ print :: proc(obj: ^Obj) {
 
 // Environment is just a simple list of key-val (dotted) pairs
 
-env_find :: proc(env, key: ^Obj) -> ^Obj {
+env_find :: proc(env, key: Obj) -> Obj {
 	if !is(key, Atom) {fail("Expected 'key' to be an Atom in env_find()")}
 
 	for v := env; v != state.nil; v = cdr(v) {
-		kv := car(env)
+		kv := car(v)
 		if key == car(kv) {
 			return cdr(kv)
 		}
@@ -430,17 +429,12 @@ env_find :: proc(env, key: ^Obj) -> ^Obj {
 	return nil
 }
 
-env_define :: proc(env, key, val: ^Obj, allocator := context.allocator) -> ^Obj {
-	return obj_new(obj_new(key, val, allocator), env, allocator)
+env_define :: proc(env, key, val: Obj) -> Obj {
+	return pair_new(pair_new(key, val), env)
 }
 
-env_define_prim :: proc(
-	env: ^Obj,
-	name: string,
-	fn: proc(env: ^^Obj, allocator := context.allocator),
-	allocator := context.allocator,
-) -> ^Obj {
-	return env_define(env, intern(name, allocator), obj_new(fn, allocator), allocator)
+env_define_prim :: proc(env: Obj, name: string, fn: proc(env: ^Obj)) -> Obj {
+	return env_define(env, intern(name), primitive_new(fn))
 }
 
 
@@ -448,12 +442,12 @@ env_define_prim :: proc(
  * Value Stack Operations
  ******************************************************************/
 
-push :: proc(obj: ^Obj, allocator := context.allocator) {
-	state.stack = obj_new(obj, state.stack, allocator)
+push :: proc(obj: Obj) {
+	state.stack = pair_new(obj, state.stack)
 }
 
-try_pop :: proc() -> (^Obj, bool) {
-	if state.stack == nil {
+try_pop :: proc() -> (Obj, bool) {
+	if state.stack == nil || state.stack == state.nil {
 		return nil, false
 	}
 
@@ -462,7 +456,7 @@ try_pop :: proc() -> (^Obj, bool) {
 	return o, true
 }
 
-pop :: proc() -> ^Obj {
+pop :: proc() -> Obj {
 	if ret, ok := try_pop(); ok {
 		return ret
 	} else {
@@ -474,79 +468,167 @@ pop :: proc() -> ^Obj {
  * Eval
  ******************************************************************/
 
-compute :: proc(comp, env: ^Obj) {}
-eval :: proc(expr: ^Obj, env: ^^Obj) {}
+compute :: proc(comp: Obj, env: ^Obj) {
+	when ODIN_DEBUG {
+		fmt.print("compute: ")
+		print(comp)
+	}
 
+	cmp := comp
+	for cmp != state.nil {
+		cmd := car(cmp)
+		cmp = cdr(cmp)
+
+		if cmd == state.atom_quote {
+			if cmp == state.nil {fail("Expected data following a quote form")}
+			push(car(cmp))
+			cmp = cdr(cmp)
+
+			continue
+		}
+
+		eval(cmd, env)
+	}
+}
+
+eval :: proc(expr: Obj, env: ^Obj) {
+	when ODIN_DEBUG {
+		fmt.print("eval: ")
+		print(expr)
+	}
+
+	if is(expr, Atom) {
+		val := env_find(env^, expr)
+		if is(val, Closure) {
+			compute(val.(Closure).body^, val.(Closure).env)
+		} else if is(val, Primitive) {
+			val.(Primitive)(env^)
+		} else {
+			push(val)
+		}
+	} else if is(expr, Nil) || is(expr, Pair) {
+		c := Closure{new(Obj), new(Obj)}
+		c.body^ = expr
+		c.env^ = env^
+
+		push(closure_new(c))
+	} else {
+		push(expr)
+	}
+}
 
 /*******************************************************************
  * Primitives
  ******************************************************************/
 
-
 // Core primitives
-prim_push :: proc(env: ^^Obj, allocator := context.allocator) {push(env_find(env^, pop()))}
-prim_pop :: proc(env: ^^Obj, allocator := context.allocator) {k := pop();v := pop();env^ = env_define(env^, k, v)}
-prim_eq :: proc(_: ^^Obj, allocator := context.allocator) {push(obj_equal(pop(), pop()) ? state.atom_true : state.nil)}
-prim_cons :: proc(_: ^^Obj, allocator := context.allocator) {a := pop()
-	b := pop()
-	push(obj_new(a, b, allocator))}
-prim_car :: proc(_: ^^Obj, allocator := context.allocator) {push(car(pop()))}
-prim_cdr :: proc(_: ^^Obj, allocator := context.allocator) {push(cdr(pop()))}
-prim_cswap :: proc(_: ^^Obj, allocator := context.allocator) {
-	if (pop() == state.atom_true) {a := pop()
-		b := pop()
-		push(a)
-		push(b)
+prim_push :: proc(env: ^Obj) {
+	a := pop()
+	defer obj_destroy(a)
+
+	push(env_find(env^, a))
+}
+prim_pop :: proc(env: ^Obj) {
+	k, v := pop(), pop()
+	env^ = env_define(env^, k, v)
+}
+prim_eq :: proc(_: ^Obj) {
+	a, b := pop(), pop()
+	defer {obj_destroy(a);obj_destroy(b)}
+
+	push(obj_equal(a, b) ? state.atom_true : state.nil)
+}
+prim_cons :: proc(_: ^Obj) {
+	a, b := pop(), pop()
+	push(pair_new(a, b))
+}
+prim_car :: proc(_: ^Obj) {
+	a := pop()
+	defer obj_destroy(a)
+
+	push(car(a))
+}
+prim_cdr :: proc(_: ^Obj) {
+	a := pop()
+	defer obj_destroy(a)
+
+	push(cdr(a))
+}
+prim_cswap :: proc(_: ^Obj) {
+	t := pop()
+	defer obj_destroy(t)
+
+	if (pop() == state.atom_true) {
+		a, b := pop(), pop()
+		push(a);push(b)
 	}
 }
-prim_tag :: proc(_: ^^Obj, allocator := context.allocator) {push(
-		obj_new(pop().(Number), allocator),
-	)}
-prim_read :: proc(_: ^^Obj, allocator := context.allocator) {push(read())}
-prim_print :: proc(_: ^^Obj, allocator := context.allocator) {print(pop())}
+prim_tag :: proc(_: ^Obj) {
+	a := pop()
+	defer obj_destroy(a)
+
+	push(number_new(a.(Number)))
+}
+prim_read :: proc(_: ^Obj) {push(read())}
+prim_print :: proc(_: ^Obj) {
+	a := pop()
+
+	print(a)
+}
 
 // Extra primitives
-prim_stack :: proc(_: ^^Obj, allocator := context.allocator) {push(state.stack)}
-prim_env :: proc(env: ^^Obj, allocator := context.allocator) {push(env^)}
-prim_sub :: proc(_: ^^Obj, allocator := context.allocator) {b := pop()
-	a := pop()
-	push(obj_new(obj_i64(a) - obj_i64(b), allocator))}
-prim_mul :: proc(_: ^^Obj, allocator := context.allocator) {b := pop()
-	a := pop()
-	push(obj_new(obj_i64(a) * obj_i64(b), allocator))}
-prim_nand :: proc(_: ^^Obj, allocator := context.allocator) {b := pop()
-	a := pop()
-	push(obj_new(~(obj_i64(a) & obj_i64(b)), allocator))}
-prim_lsh :: proc(_: ^^Obj, allocator := context.allocator) {b := pop()
-	a := pop()
-	push(obj_new(obj_i64(a) << uint(obj_i64(b)), allocator))}
-prim_rsh :: proc(_: ^^Obj, allocator := context.allocator) {b := pop()
-	a := pop()
-	push(obj_new(obj_i64(a) >> uint(obj_i64(b)), allocator))}
+prim_stack :: proc(_: ^Obj) {push(state.stack)}
+prim_env :: proc(env: ^Obj) {push(env^)}
+prim_sub :: proc(_: ^Obj) {
+	b, a := pop(), pop()
+	defer {obj_destroy(a);obj_destroy(b)}
 
-// when USE_LOWLEVEL {
-// Low-level primitives
-// prim_ptr_state :: proc(_: ^^Obj), allocator := context.allocator {push(obj_new(state, allocator))}
-// prim_ptr_read :: proc(_: ^^Obj), allocator := context.allocator {push(obj_new(obj_i64(pop()), allocator))}
-// prim_ptr_write :: proc(_: ^^Obj) {b := pop();a := pop();uintptr(obj_i64(a))^ = obj_i64(b)}
-// prim_ptr_to_obj :: proc(_: ^^Obj) {push(obj_i64(pop()))}
-// prim_ptr_from_obj :: proc(_: ^^Obj, allocator := context.allocator) {push(obj_new(pop(), allocator))}
-// }
+	push(number_new(obj_i64(a) - obj_i64(b)))
+}
+prim_mul :: proc(_: ^Obj) {
+	b, a := pop(), pop()
+	defer {obj_destroy(a);obj_destroy(b)}
 
-load_file :: proc(filename: string, allocator := context.allocator) -> (string, bool) {
+	push(number_new(obj_i64(a) * obj_i64(b)))}
+prim_nand :: proc(_: ^Obj) {
+	b, a := pop(), pop()
+	defer {obj_destroy(a);obj_destroy(b)}
+
+	push(number_new(~(obj_i64(a) & obj_i64(b))))}
+prim_lsh :: proc(_: ^Obj) {
+	b, a := pop(), pop()
+	defer {obj_destroy(a);obj_destroy(b)}
+
+	push(number_new(obj_i64(a) << uint(obj_i64(b))))}
+prim_rsh :: proc(_: ^Obj) {
+	b, a := pop(), pop()
+	defer {obj_destroy(a);obj_destroy(b)}
+
+	push(number_new(obj_i64(a) >> uint(obj_i64(b))))}
+
+when #config(USE_LOWLEVEL, false) {
+	// Low-level primitives
+	prim_ptr_state :: proc(_: ^Obj) {}
+	prim_ptr_read :: proc(_: ^Obj) {}
+	prim_ptr_write :: proc(_: ^Obj) {}
+	prim_ptr_to_obj :: proc(_: ^Obj) {}
+	prim_ptr_from_obj :: proc(_: ^Obj) {}
+}
+
+load_file :: proc(filename: string) -> (string, bool) {
 	file, erno := os.open(filename)
 	if erno != 0 {
 		return "", false
 	}
 	defer os.close(file)
 
-	b, ok := os.read_entire_file_from_handle(file, allocator)
+	b, ok := os.read_entire_file_from_handle(file)
 	if !ok {
 		return "", ok
 	}
-	defer delete(b, allocator)
+	defer delete(b)
 
-	str, err := strings.clone_from_bytes(b, allocator)
+	str, err := strings.clone_from_bytes(b)
 	if err != nil {
 		return "", false
 	}
@@ -554,64 +636,66 @@ load_file :: proc(filename: string, allocator := context.allocator) -> (string, 
 	return str, true
 }
 
-setup :: proc(filename: string, allocator := context.allocator) {
-	state.input = load_file(filename, allocator) or_else panic("failed to load input file")
+setup :: proc(filename: string) {
+	state.input = load_file(filename) or_else panic("failed to load input file")
 	state.pos = 0
 
 	state.read_stack = nil
-	state.nil = obj_new(allocator)
+	state.nil = nil_new()
 
 	state.interned_atoms = state.nil
-	state.atom_true = intern("t", allocator)
-	state.atom_quote = intern("quote", allocator)
-	state.atom_push = intern("push", allocator)
-	state.atom_pop = intern("pop", allocator)
+	state.atom_true = intern("t")
+	state.atom_quote = intern("quote")
+	state.atom_push = intern("push")
+	state.atom_pop = intern("pop")
 
 	state.stack = state.nil
 
 	env := state.nil
 
 	// core primitives
-	env = env_define_prim(env, "push", prim_push, allocator)
-	env = env_define_prim(env, "pop", prim_pop, allocator)
-	env = env_define_prim(env, "cons", prim_cons, allocator)
-	env = env_define_prim(env, "car", prim_car, allocator)
-	env = env_define_prim(env, "cdr", prim_cdr, allocator)
-	env = env_define_prim(env, "eq", prim_eq, allocator)
-	env = env_define_prim(env, "cswap", prim_cswap, allocator)
-	env = env_define_prim(env, "tag", prim_tag, allocator)
-	env = env_define_prim(env, "read", prim_read, allocator)
-	env = env_define_prim(env, "print", prim_print, allocator)
+	env = env_define_prim(env, "push", prim_push)
+	env = env_define_prim(env, "pop", prim_pop)
+	env = env_define_prim(env, "cons", prim_cons)
+	env = env_define_prim(env, "car", prim_car)
+	env = env_define_prim(env, "cdr", prim_cdr)
+	env = env_define_prim(env, "eq", prim_eq)
+	env = env_define_prim(env, "cswap", prim_cswap)
+	env = env_define_prim(env, "tag", prim_tag)
+	env = env_define_prim(env, "read", prim_read)
+	env = env_define_prim(env, "print", prim_print)
 
 	// extra primitives
-	env = env_define_prim(env, "stack", prim_stack, allocator)
-	env = env_define_prim(env, "env", prim_env, allocator)
-	env = env_define_prim(env, "-", prim_sub, allocator)
-	env = env_define_prim(env, "*", prim_mul, allocator)
-	env = env_define_prim(env, "nand", prim_nand, allocator)
-	env = env_define_prim(env, "<<", prim_lsh, allocator)
-	env = env_define_prim(env, ">>", prim_rsh, allocator)
+	env = env_define_prim(env, "stack", prim_stack)
+	env = env_define_prim(env, "env", prim_env)
+	env = env_define_prim(env, "-", prim_sub)
+	env = env_define_prim(env, "*", prim_mul)
+	env = env_define_prim(env, "nand", prim_nand)
+	env = env_define_prim(env, "<<", prim_lsh)
+	env = env_define_prim(env, ">>", prim_rsh)
 
 	// low-level primitives
-	// env = env_define_prim(env, "ptr-state!", prim_ptr_state, allocator)
-	// env = env_define_prim(env, "ptr-read!", prim_ptr_read, allocator)
-	// env = env_define_prim(env, "ptr-write!", prim_ptr_write, allocator)
-	// env = env_define_prim(env, "ptr-to-obj!", prim_ptr_to_obj, allocator)
-	// env = env_define_prim(env, "ptr-from-obj!", prim_ptr_from_obj, allocator)
+	when #config(USE_LOWLEVEL, false) {
+		env = env_define_prim(env, "ptr-state!", prim_ptr_state)
+		env = env_define_prim(env, "ptr-read!", prim_ptr_read)
+		env = env_define_prim(env, "ptr-write!", prim_ptr_write)
+		env = env_define_prim(env, "ptr-to-obj!", prim_ptr_to_obj)
+		env = env_define_prim(env, "ptr-from-obj!", prim_ptr_from_obj)
+	}
 
 	state.env = env
 }
 
-cleanup :: proc(allocator := context.allocator) {
-	delete(state.input, allocator)
-	obj_destroy(state.nil, allocator)
-	obj_destroy(&state.interned_atoms, allocator)
-	obj_destroy(&state.atom_true, allocator)
-	obj_destroy(&state.atom_quote, allocator)
-	obj_destroy(&state.atom_push, allocator)
-	obj_destroy(&state.atom_pop, allocator)
-	obj_destroy(&state.stack, allocator)
-	obj_destroy(&state.env, allocator)
+cleanup :: proc() {
+	delete(state.input)
+	obj_destroy(state.stack)
+	obj_destroy(state.interned_atoms)
+	obj_destroy(state.env)
+	obj_destroy(state.atom_true)
+	obj_destroy(state.atom_quote)
+	obj_destroy(state.atom_push)
+	obj_destroy(state.atom_pop)
+	obj_destroy(state.nil)
 }
 
 main :: proc() {
@@ -650,7 +734,7 @@ main :: proc() {
 	defer cleanup()
 
 	obj := read()
-	defer obj_destroy(&obj)
+	defer obj_destroy(obj)
 
-	compute(obj, state.env)
+	compute(obj, &state.env)
 }
