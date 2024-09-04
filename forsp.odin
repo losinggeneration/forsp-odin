@@ -16,91 +16,89 @@ Pair :: struct {
 Closure :: struct {
 	body, env: ^Obj,
 }
-Primitive :: proc(env: Obj)
+Primitive :: proc(env: ^^Obj)
 
-Obj :: union {
-	Nil,
-	Atom,
-	Number,
-	Pair,
-	Closure,
-	Primitive,
+Tags :: enum {
+	TagNil,
+	TagAtom,
+	TagNumber,
+	TagPair,
+	TagClosure,
+	TagPrimitive,
+}
+
+Obj :: struct {
+	tag:  Tags,
+	type: union {
+		Nil,
+		Atom,
+		Number,
+		Pair,
+		Closure,
+		Primitive,
+	},
 }
 
 State :: struct {
 	input:          string, // input data string used by read()
 	pos:            u64, // input data position used by read()
-	nil:            Obj, // nil: ()
-	read_stack:     Obj, // defered obj to emit from read
+	nil:            ^Obj, // nil: ()
+	read_stack:     ^Obj, // defered obj to emit from read
 
 	// Atoms
-	interned_atoms: Obj, // interned atoms list
-	atom_true:      Obj, // atom: t
-	atom_quote:     Obj, // atom: quote
-	atom_push:      Obj, // atom: push
-	atom_pop:       Obj, // atom: pop
+	interned_atoms: ^Obj, // interned atoms list
+	atom_true:      ^Obj, // atom: t
+	atom_quote:     ^Obj, // atom: quote
+	atom_push:      ^Obj, // atom: push
+	atom_pop:       ^Obj, // atom: pop
 
 	// stack/env
-	stack:          Obj, // top-of-stack (implemented with pairs)
-	env:            Obj, // top-level / initial environment
+	stack:          ^Obj, // top-of-stack (implemented with pairs)
+	env:            ^Obj, // top-level / initial environment
 }
 
 state: State
 
-nil_new :: proc() -> Obj {
-	return Nil(true)
+nil_new :: proc() -> ^Obj {
+	o := new(Obj)
+	o.tag = .TagNil
+	o.type = Nil(true)
+	return o
 }
 
-atom_new :: proc(str: string) -> Obj {
-	return Atom(str)
+atom_new :: proc(str: string) -> ^Obj {
+	o := new(Obj)
+	o.tag = .TagAtom
+	o.type = Atom(str)
+	return o
 }
 
-number_new :: proc(n: i64) -> Obj {
-	return Number(n)
+number_new :: proc(n: i64) -> ^Obj {
+	o := new(Obj)
+	o.tag = .TagNumber
+	o.type = Number(n)
+	return o
 }
 
-pair_new :: proc(car, cdr: Obj) -> Obj {
-	p := Pair{new(Obj), new(Obj)}
-	p.car^ = car
-	p.cdr^ = cdr
-	return p
+pair_new :: proc(p: Pair) -> ^Obj {
+	o := new(Obj)
+	o.tag = .TagPair
+	o.type = p
+	return o
 }
 
-pair_destroy :: proc(p: ^Pair) {
-	if p.car != nil {
-		obj_destroy(p.car^)
-		free(p.car)
-		p.car = nil
-	}
-
-	if p.cdr != nil {
-		obj_destroy(p.cdr^)
-		free(p.cdr)
-		p.cdr = nil
-	}
+closure_new :: proc(c: Closure) -> ^Obj {
+	o := new(Obj)
+	o.tag = .TagClosure
+	o.type = c
+	return o
 }
 
-closure_new :: proc(c: Closure) -> Obj {
-	return c
-}
-
-closure_destroy :: proc(c: ^Closure) {
-	if true {return}
-	if c.env != nil {
-		obj_destroy(c.env^)
-		free(c.env)
-		c.env = nil
-	}
-
-	if c.body != nil {
-		obj_destroy(c.body^)
-		free(c.body)
-		c.body = nil
-	}
-}
-
-primitive_new :: proc(f: proc(env: ^Obj)) -> Obj {
-	return Primitive(f)
+primitive_new :: proc(f: proc(env: ^^Obj)) -> ^Obj {
+	o := new(Obj)
+	o.tag = .TagPrimitive
+	o.type = Primitive(f)
+	return o
 }
 
 obj_new :: proc {
@@ -112,40 +110,18 @@ obj_new :: proc {
 	primitive_new,
 }
 
-obj_delete :: proc(obj: Obj) {
-	if obj == nil || obj == state.nil {
-		return
-	}
-
-	switch &v in obj {
-	case Nil, Atom, Number, Primitive:
-	// nothing to delete/free
-	case Closure:
-	// closure_destroy(&v)
-	case Pair:
-	// pair_destroy(&v)
-	}
-}
-
-obj_destroy :: proc {
-	obj_delete,
-	pair_destroy,
-	closure_destroy,
-}
-
 assert :: proc(v: bool, msg: string) {
 	if !v {
 		fmt.panicf("ASSERT: %s", msg)
 	}
 }
 
-assert_type :: proc(v: $V, $t: typeid, msg: string) {
-	_, ok := v.(t)
-	assert(ok, msg)
+assert_type :: proc(v: ^Obj, $t: typeid, msg: string) {
+	assert(is(v, t), msg)
 }
 
-fail_type :: proc(v: any, $t: typeid, msg: string) {
-	if is(v, t) {
+fail_type :: proc(v: ^Obj, $t: typeid, msg: string) {
+	if !is(v, t) {
 		fail(msg)
 	}
 }
@@ -156,49 +132,64 @@ fail :: proc(msg: string) {
 
 failf :: proc(msg: string, args: ..any) {
 	m := fmt.aprintf(msg, ..args) // I guess we just leak this...
-	fmt.panicf("FAIL: %s", m)
+	defer delete(m)
+	fail(m)
 }
 
-is :: proc(v: $V, $t: typeid) -> bool {
-	_, ok := v.(t)
-	return ok
+is :: proc(v: ^Obj, $t: typeid) -> bool {
+	z: t
+	c: any = z
+	switch _ in c {
+	case Nil:
+		return v.tag == .TagNil
+	case Atom:
+		return v.tag == .TagAtom
+	case Number:
+		return v.tag == .TagNumber
+	case Pair:
+		return v.tag == .TagPair
+	case Closure:
+		return v.tag == .TagClosure
+	case Primitive:
+		return v.tag == .TagPrimitive
+	}
+
+	return false
 }
 
-intern :: proc(atom_buf: string) -> Obj {
-	for list := state.interned_atoms; list != state.nil; list = list.(Pair).cdr^ {
+intern :: proc(atom_buf: string) -> ^Obj {
+	for list := state.interned_atoms; list != state.nil; list = list.type.(Pair).cdr {
 		assert_type(list, Pair, "state.interned_atoms must be Pairs")
 
-		elem := list.(Pair).car
+		elem := list.type.(Pair).car
 		assert_type(elem, Atom, "state.interned_atoms.car must be an Atom")
-		if len(atom_buf) == len(elem.(Atom)) && atom_buf == elem.(Atom) {
-			return elem^
+		if len(atom_buf) == len(elem.type.(Atom)) && atom_buf == elem.type.(Atom) {
+			return elem
 		}
 	}
 
 	// not found, create a new one and push the front of the list
-	atom := atom_new(atom_buf)
-	state.interned_atoms = pair_new(atom, state.interned_atoms)
+	atom := obj_new(atom_buf)
+	state.interned_atoms = obj_new(Pair{atom, state.interned_atoms})
 
 	return atom
 }
 
-car :: proc(obj: Obj) -> Obj {
+car :: proc(obj: ^Obj) -> ^Obj {
 	fail_type(obj, Pair, "Expected Pair to apply car() function")
-	return obj.(Pair).car^
+	return obj.type.(Pair).car
 }
 
-cdr :: proc(obj: Obj) -> Obj {
+cdr :: proc(obj: ^Obj) -> ^Obj {
 	fail_type(obj, Pair, "Expected Pair to apply cdr() function")
-	return obj.(Pair).cdr^
+	return obj.type.(Pair).cdr
 }
 
-obj_equal :: proc(a, b: Obj) -> bool {
-	return a == b || (is(a, Number) && is(b, Number) && a.(Number) == b.(Number))
+obj_equal :: proc(a, b: ^Obj) -> bool {
+	return a == b || (is(a, Number) && is(b, Number) && a.type.(Number) == b.type.(Number))
 }
 
-obj_i64 :: proc(a: Obj) -> i64 {
-	return a.(Number) if is(a, Number) else 0
-}
+obj_i64 :: proc(a: ^Obj) -> i64 {return a.type.(Number) if is(a, Number) else 0}
 
 /*******************************************************************
  * Read
@@ -213,31 +204,12 @@ advance :: proc() {
 	state.pos += 1
 }
 
-is_white :: proc(c: u8) -> bool {
-	switch c {
-	case ' ', '\t', '\n':
-		return true
-	}
+is_white :: proc(c: u8) -> bool {return c == ' ' || c == '\t' || c == '\n'}
 
-	return false
-}
-
-is_directive :: proc(c: u8) -> bool {
-	switch c {
-	case '\'', '^', '$':
-		return true
-	}
-
-	return false
-}
+is_directive :: proc(c: u8) -> bool {return c == '\'' || c == '^' || c == '$'}
 
 is_punctuation :: proc(c: u8) -> bool {
-	switch c {
-	case 0, '(', ')', ';':
-		return true
-	}
-
-	return true if is_white(c) || is_directive(c) else false
+	return c == 0 || is_white(c) || is_directive(c) || c == '(' || c == ')' || c == ';'
 }
 
 skip_white_and_comments :: proc() {
@@ -266,7 +238,7 @@ skip_white_and_comments :: proc() {
 	}
 }
 
-read_list :: proc() -> Obj {
+read_list :: proc() -> ^Obj {
 	if state.read_stack == nil {
 		skip_white_and_comments()
 		c := peek()
@@ -276,9 +248,7 @@ read_list :: proc() -> Obj {
 		}
 	}
 
-	first := read()
-	second := read_list()
-	return pair_new(first, second)
+	return obj_new(Pair{read(), read_list()})
 }
 
 parse_i64 :: proc(str: string) -> (i64, bool) {
@@ -286,28 +256,24 @@ parse_i64 :: proc(str: string) -> (i64, bool) {
 	return i64(i), ok
 }
 
-read_scalar :: proc() -> Obj {
+read_scalar :: proc() -> ^Obj {
 	// otherwise, assume atom or number and read it
 	start := state.pos
-	for {
-		if !is_punctuation(peek()) {
-			advance()
-			continue
-		}
-
-		break
+	for !is_punctuation(peek()) {
+		advance()
 	}
 
 	str := state.input[start:state.pos]
 	// is it a number?
 	if n, ok := parse_i64(str); ok {
-		return number_new(n)
-	} else { 	// atom
-		return intern(str)
+		return obj_new(n)
 	}
+
+	// atom
+	return intern(str)
 }
 
-read :: proc() -> Obj {
+read :: proc() -> ^Obj {
 	read_stack := state.read_stack
 	if read_stack != nil {
 		state.read_stack = cdr(read_stack)
@@ -329,10 +295,10 @@ read :: proc() -> Obj {
 	// A push?
 	case '^':
 		advance()
-		s: Obj
-		s = pair_new(state.atom_push, s)
-		s = pair_new(read_scalar(), s)
-		s = pair_new(state.atom_quote, s)
+		s: ^Obj
+		s = obj_new(Pair{state.atom_push, s})
+		s = obj_new(Pair{read_scalar(), s})
+		s = obj_new(Pair{state.atom_quote, s})
 		state.read_stack = s
 
 		return read()
@@ -340,10 +306,10 @@ read :: proc() -> Obj {
 	// A pop?
 	case '$':
 		advance()
-		s: Obj
-		s = pair_new(state.atom_pop, s)
-		s = pair_new(read_scalar(), s)
-		s = pair_new(state.atom_quote, s)
+		s: ^Obj
+		s = obj_new(Pair{state.atom_pop, s})
+		s = obj_new(Pair{read_scalar(), s})
+		s = obj_new(Pair{state.atom_quote, s})
 		state.read_stack = s
 
 		return read()
@@ -362,7 +328,7 @@ read :: proc() -> Obj {
  * Print
  ******************************************************************/
 
-print_list_tail :: proc(obj: Obj) {
+print_list_tail :: proc(obj: ^Obj) {
 	if obj == state.nil {
 		fmt.print(")")
 		return
@@ -370,41 +336,46 @@ print_list_tail :: proc(obj: Obj) {
 
 	if is(obj, Pair) {
 		fmt.print(" ")
-		print_recurse(obj.(Pair).car^)
-		print_list_tail(obj.(Pair).cdr^)
-		return
+		print_recurse(obj.type.(Pair).car)
+		print_list_tail(obj.type.(Pair).cdr)
+	} else {
+		fmt.print(" . ")
+		print_recurse(obj)
+		fmt.print(")")
 	}
-
-	fmt.print(" . ")
-	print_recurse(obj)
-	fmt.print(")")
 }
 
-print_recurse :: proc(obj: Obj) {
+print_recurse :: proc(obj: ^Obj) {
 	if obj == state.nil {
 		fmt.print("()")
 		return
 	}
 
-	switch t in obj {
-	case Nil, Atom, Number:
-		fmt.print(t)
-	case Pair:
+	switch obj.tag {
+	case .TagNil: // do nothing
+
+	case .TagAtom:
+		fmt.print(obj.type.(Atom))
+
+	case .TagNumber:
+		fmt.print(obj.type.(Number))
+
+	case .TagPair:
 		fmt.print("(")
-		print_recurse(t.car^)
-		print_list_tail(t.cdr^)
+		print_recurse(obj.type.(Pair).car)
+		print_list_tail(obj.type.(Pair).cdr)
 
-	case Closure:
+	case .TagClosure:
 		fmt.print("CLOSURE<")
-		print_recurse(t.body^)
-		fmt.printf(", %p>", t.env^)
+		print_recurse(obj.type.(Closure).body)
+		fmt.printf(", %p>", obj.type.(Closure).env)
 
-	case Primitive:
-		fmt.printf("PRIM<%p>", t)
+	case .TagPrimitive:
+		fmt.printf("PRIM<%p>", obj.type.(Primitive))
 	}
 }
 
-print :: proc(obj: Obj) {
+print :: proc(obj: ^Obj) {
 	print_recurse(obj)
 	fmt.println()
 }
@@ -415,7 +386,7 @@ print :: proc(obj: Obj) {
 
 // Environment is just a simple list of key-val (dotted) pairs
 
-env_find :: proc(env, key: Obj) -> Obj {
+env_find :: proc(env, key: ^Obj) -> ^Obj {
 	if !is(key, Atom) {fail("Expected 'key' to be an Atom in env_find()")}
 
 	for v := env; v != state.nil; v = cdr(v) {
@@ -425,16 +396,16 @@ env_find :: proc(env, key: Obj) -> Obj {
 		}
 	}
 
-	failf("Failed to find key='%s' in environment", key.(Atom))
+	failf("Failed to find key='%s' in environment", key.type.(Atom))
 	return nil
 }
 
-env_define :: proc(env, key, val: Obj) -> Obj {
-	return pair_new(pair_new(key, val), env)
+env_define :: proc(env, key, val: ^Obj) -> ^Obj {
+	return obj_new(Pair{obj_new(Pair{key, val}), env})
 }
 
-env_define_prim :: proc(env: Obj, name: string, fn: proc(env: ^Obj)) -> Obj {
-	return env_define(env, intern(name), primitive_new(fn))
+env_define_prim :: proc(env: ^Obj, name: string, fn: proc(env: ^^Obj)) -> ^Obj {
+	return env_define(env, intern(name), obj_new(fn))
 }
 
 
@@ -442,11 +413,11 @@ env_define_prim :: proc(env: Obj, name: string, fn: proc(env: ^Obj)) -> Obj {
  * Value Stack Operations
  ******************************************************************/
 
-push :: proc(obj: Obj) {
-	state.stack = pair_new(obj, state.stack)
+push :: proc(obj: ^Obj) {
+	state.stack = obj_new(Pair{obj, state.stack})
 }
 
-try_pop :: proc() -> (Obj, bool) {
+try_pop :: proc() -> (^Obj, bool) {
 	if state.stack == nil || state.stack == state.nil {
 		return nil, false
 	}
@@ -456,24 +427,26 @@ try_pop :: proc() -> (Obj, bool) {
 	return o, true
 }
 
-pop :: proc() -> Obj {
+pop :: proc() -> ^Obj {
 	if ret, ok := try_pop(); ok {
 		return ret
-	} else {
-		return nil
 	}
+
+	fail("Value Stack Underflow")
+	return nil
 }
 
 /*******************************************************************
  * Eval
  ******************************************************************/
 
-compute :: proc(comp: Obj, env: ^Obj) {
+compute :: proc(comp: ^Obj, env: ^Obj) {
 	when ODIN_DEBUG {
 		fmt.print("compute: ")
 		print(comp)
 	}
 
+	local_env := env
 	cmp := comp
 	for cmp != state.nil {
 		cmd := car(cmp)
@@ -487,11 +460,11 @@ compute :: proc(comp: Obj, env: ^Obj) {
 			continue
 		}
 
-		eval(cmd, env)
+		eval(cmd, &local_env)
 	}
 }
 
-eval :: proc(expr: Obj, env: ^Obj) {
+eval :: proc(expr: ^Obj, env: ^^Obj) {
 	when ODIN_DEBUG {
 		fmt.print("eval: ")
 		print(expr)
@@ -500,18 +473,14 @@ eval :: proc(expr: Obj, env: ^Obj) {
 	if is(expr, Atom) {
 		val := env_find(env^, expr)
 		if is(val, Closure) {
-			compute(val.(Closure).body^, val.(Closure).env)
+			compute(val.type.(Closure).body, val.type.(Closure).env)
 		} else if is(val, Primitive) {
-			val.(Primitive)(env^)
+			val.type.(Primitive)(env)
 		} else {
 			push(val)
 		}
 	} else if is(expr, Nil) || is(expr, Pair) {
-		c := Closure{new(Obj), new(Obj)}
-		c.body^ = expr
-		c.env^ = env^
-
-		push(closure_new(c))
+		push(obj_new(Closure{expr, env^}))
 	} else {
 		push(expr)
 	}
@@ -522,97 +491,41 @@ eval :: proc(expr: Obj, env: ^Obj) {
  ******************************************************************/
 
 // Core primitives
-prim_push :: proc(env: ^Obj) {
-	a := pop()
-	defer obj_destroy(a)
-
-	push(env_find(env^, a))
-}
-prim_pop :: proc(env: ^Obj) {
-	k, v := pop(), pop()
-	env^ = env_define(env^, k, v)
-}
-prim_eq :: proc(_: ^Obj) {
+prim_push :: proc(env: ^^Obj) {a := pop();push(env_find(env^, a))}
+prim_pop :: proc(env: ^^Obj) {k, v := pop(), pop();env^ = env_define(env^, k, v)}
+prim_eq :: proc(_: ^^Obj) {
 	a, b := pop(), pop()
-	defer {obj_destroy(a);obj_destroy(b)}
-
 	push(obj_equal(a, b) ? state.atom_true : state.nil)
 }
-prim_cons :: proc(_: ^Obj) {
-	a, b := pop(), pop()
-	push(pair_new(a, b))
-}
-prim_car :: proc(_: ^Obj) {
-	a := pop()
-	defer obj_destroy(a)
-
-	push(car(a))
-}
-prim_cdr :: proc(_: ^Obj) {
-	a := pop()
-	defer obj_destroy(a)
-
-	push(cdr(a))
-}
-prim_cswap :: proc(_: ^Obj) {
-	t := pop()
-	defer obj_destroy(t)
-
+prim_cons :: proc(_: ^^Obj) {a, b := pop(), pop();push(obj_new(Pair{a, b}))}
+prim_car :: proc(_: ^^Obj) {a := pop();push(car(a))}
+prim_cdr :: proc(_: ^^Obj) {a := pop();push(cdr(a))}
+prim_cswap :: proc(_: ^^Obj) {
 	if (pop() == state.atom_true) {
 		a, b := pop(), pop()
 		push(a);push(b)
 	}
 }
-prim_tag :: proc(_: ^Obj) {
-	a := pop()
-	defer obj_destroy(a)
-
-	push(number_new(a.(Number)))
-}
-prim_read :: proc(_: ^Obj) {push(read())}
-prim_print :: proc(_: ^Obj) {
-	a := pop()
-
-	print(a)
-}
+prim_tag :: proc(_: ^^Obj) {a := pop();push(obj_new(i64(a.tag)))}
+prim_read :: proc(_: ^^Obj) {push(read())}
+prim_print :: proc(_: ^^Obj) {a := pop();print(a)}
 
 // Extra primitives
-prim_stack :: proc(_: ^Obj) {push(state.stack)}
-prim_env :: proc(env: ^Obj) {push(env^)}
-prim_sub :: proc(_: ^Obj) {
-	b, a := pop(), pop()
-	defer {obj_destroy(a);obj_destroy(b)}
-
-	push(number_new(obj_i64(a) - obj_i64(b)))
-}
-prim_mul :: proc(_: ^Obj) {
-	b, a := pop(), pop()
-	defer {obj_destroy(a);obj_destroy(b)}
-
-	push(number_new(obj_i64(a) * obj_i64(b)))}
-prim_nand :: proc(_: ^Obj) {
-	b, a := pop(), pop()
-	defer {obj_destroy(a);obj_destroy(b)}
-
-	push(number_new(~(obj_i64(a) & obj_i64(b))))}
-prim_lsh :: proc(_: ^Obj) {
-	b, a := pop(), pop()
-	defer {obj_destroy(a);obj_destroy(b)}
-
-	push(number_new(obj_i64(a) << uint(obj_i64(b))))}
-prim_rsh :: proc(_: ^Obj) {
-	b, a := pop(), pop()
-	defer {obj_destroy(a);obj_destroy(b)}
-
-	push(number_new(obj_i64(a) >> uint(obj_i64(b))))}
+prim_stack :: proc(_: ^^Obj) {push(state.stack)}
+prim_env :: proc(env: ^^Obj) {push(env^)}
+prim_sub :: proc(_: ^^Obj) {b, a := pop(), pop();push(obj_new(obj_i64(a) - obj_i64(b)))}
+prim_mul :: proc(_: ^^Obj) {b, a := pop(), pop();push(obj_new(obj_i64(a) * obj_i64(b)))}
+prim_nand :: proc(_: ^^Obj) {b, a := pop(), pop();push(obj_new(~(obj_i64(a) & obj_i64(b))))}
+prim_lsh :: proc(_: ^^Obj) {b, a := pop(), pop();push(obj_new(obj_i64(a) << uint(obj_i64(b))))}
+prim_rsh :: proc(_: ^^Obj) {b, a := pop(), pop();push(obj_new(obj_i64(a) >> uint(obj_i64(b))))}
 
 when #config(USE_LOWLEVEL, false) {
 	// Low-level primitives
-	prim_ptr_state :: proc(_: ^Obj) {}
-	prim_ptr_read :: proc(_: ^Obj) {}
-	prim_ptr_write :: proc(_: ^Obj) {}
-	prim_ptr_to_obj :: proc(_: ^Obj) {}
-	prim_ptr_from_obj :: proc(_: ^Obj) {}
+	prim_ptr_state :: proc(_: ^^Obj) {}
+	prim_ptr_read :: proc(_: ^^Obj) {}
+	prim_ptr_write :: proc(_: ^^Obj) {}
+	prim_ptr_to_obj :: proc(_: ^^Obj) {}
+	prim_ptr_from_obj :: proc(_: ^^Obj) {}
 }
 
 load_file :: proc(filename: string) -> (string, bool) {
@@ -641,7 +554,7 @@ setup :: proc(filename: string) {
 	state.pos = 0
 
 	state.read_stack = nil
-	state.nil = nil_new()
+	state.nil = obj_new()
 
 	state.interned_atoms = state.nil
 	state.atom_true = intern("t")
@@ -665,7 +578,7 @@ setup :: proc(filename: string) {
 	env = env_define_prim(env, "read", prim_read)
 	env = env_define_prim(env, "print", prim_print)
 
-	// extra primitives
+	// // extra primitives
 	env = env_define_prim(env, "stack", prim_stack)
 	env = env_define_prim(env, "env", prim_env)
 	env = env_define_prim(env, "-", prim_sub)
@@ -688,14 +601,6 @@ setup :: proc(filename: string) {
 
 cleanup :: proc() {
 	delete(state.input)
-	obj_destroy(state.stack)
-	obj_destroy(state.interned_atoms)
-	obj_destroy(state.env)
-	obj_destroy(state.atom_true)
-	obj_destroy(state.atom_quote)
-	obj_destroy(state.atom_push)
-	obj_destroy(state.atom_pop)
-	obj_destroy(state.nil)
 }
 
 main :: proc() {
@@ -734,7 +639,6 @@ main :: proc() {
 	defer cleanup()
 
 	obj := read()
-	defer obj_destroy(obj)
 
-	compute(obj, &state.env)
+	compute(obj, state.env)
 }
