@@ -18,25 +18,22 @@ Closure :: struct {
 }
 Primitive :: proc(env: ^^Obj)
 
-Tags :: enum {
-	TagNil,
-	TagAtom,
-	TagNumber,
-	TagPair,
-	TagClosure,
-	TagPrimitive,
+Obj :: union {
+	Nil,
+	Atom,
+	Number,
+	Pair,
+	Closure,
+	Primitive,
 }
 
-Obj :: struct {
-	tag:  Tags,
-	type: union {
-		Nil,
-		Atom,
-		Number,
-		Pair,
-		Closure,
-		Primitive,
-	},
+Tags :: enum {
+	Nil,
+	Atom,
+	Number,
+	Pair,
+	Closure,
+	Primitive,
 }
 
 State :: struct {
@@ -61,43 +58,37 @@ state: State
 
 nil_new :: proc() -> ^Obj {
 	o := new(Obj)
-	o.tag = .TagNil
-	o.type = Nil(true)
+	o^ = Nil(true)
 	return o
 }
 
 atom_new :: proc(str: string) -> ^Obj {
 	o := new(Obj)
-	o.tag = .TagAtom
-	o.type = Atom(str)
+	o^ = Atom(str)
 	return o
 }
 
 number_new :: proc(n: i64) -> ^Obj {
 	o := new(Obj)
-	o.tag = .TagNumber
-	o.type = Number(n)
+	o^ = Number(n)
 	return o
 }
 
 pair_new :: proc(p: Pair) -> ^Obj {
 	o := new(Obj)
-	o.tag = .TagPair
-	o.type = p
+	o^ = p
 	return o
 }
 
 closure_new :: proc(c: Closure) -> ^Obj {
 	o := new(Obj)
-	o.tag = .TagClosure
-	o.type = c
+	o^ = c
 	return o
 }
 
 primitive_new :: proc(f: proc(env: ^^Obj)) -> ^Obj {
 	o := new(Obj)
-	o.tag = .TagPrimitive
-	o.type = Primitive(f)
+	o^ = Primitive(f)
 	return o
 }
 
@@ -108,6 +99,25 @@ obj_new :: proc {
 	pair_new,
 	closure_new,
 	primitive_new,
+}
+
+obj_tag :: proc(o: ^Obj) -> Tags {
+	switch _ in o {
+	case Nil:
+		return .Nil
+	case Atom:
+		return .Atom
+	case Number:
+		return .Number
+	case Pair:
+		return .Pair
+	case Closure:
+		return .Closure
+	case Primitive:
+		return .Primitive
+	}
+
+	return nil
 }
 
 assert :: proc(v: bool, msg: string) {
@@ -137,33 +147,17 @@ failf :: proc(msg: string, args: ..any) {
 }
 
 is :: proc(v: ^Obj, $t: typeid) -> bool {
-	z: t
-	c: any = z
-	switch _ in c {
-	case Nil:
-		return v.tag == .TagNil
-	case Atom:
-		return v.tag == .TagAtom
-	case Number:
-		return v.tag == .TagNumber
-	case Pair:
-		return v.tag == .TagPair
-	case Closure:
-		return v.tag == .TagClosure
-	case Primitive:
-		return v.tag == .TagPrimitive
-	}
-
-	return false
+	_, ok := v.(t)
+	return ok
 }
 
 intern :: proc(atom_buf: string) -> ^Obj {
-	for list := state.interned_atoms; list != state.nil; list = list.type.(Pair).cdr {
+	for list := state.interned_atoms; list != state.nil; list = list.(Pair).cdr {
 		assert_type(list, Pair, "state.interned_atoms must be Pairs")
 
-		elem := list.type.(Pair).car
+		elem := list.(Pair).car
 		assert_type(elem, Atom, "state.interned_atoms.car must be an Atom")
-		if len(atom_buf) == len(elem.type.(Atom)) && atom_buf == elem.type.(Atom) {
+		if len(atom_buf) == len(elem.(Atom)) && atom_buf == elem.(Atom) {
 			return elem
 		}
 	}
@@ -177,19 +171,19 @@ intern :: proc(atom_buf: string) -> ^Obj {
 
 car :: proc(obj: ^Obj) -> ^Obj {
 	fail_type(obj, Pair, "Expected Pair to apply car() function")
-	return obj.type.(Pair).car
+	return obj.(Pair).car
 }
 
 cdr :: proc(obj: ^Obj) -> ^Obj {
 	fail_type(obj, Pair, "Expected Pair to apply cdr() function")
-	return obj.type.(Pair).cdr
+	return obj.(Pair).cdr
 }
 
 obj_equal :: proc(a, b: ^Obj) -> bool {
-	return a == b || (is(a, Number) && is(b, Number) && a.type.(Number) == b.type.(Number))
+	return a == b || (is(a, Number) && is(b, Number) && a.(Number) == b.(Number))
 }
 
-obj_i64 :: proc(a: ^Obj) -> i64 {return a.type.(Number) if is(a, Number) else 0}
+obj_i64 :: proc(a: ^Obj) -> i64 {return a.(Number) if is(a, Number) else 0}
 
 /*******************************************************************
  * Read
@@ -334,10 +328,10 @@ print_list_tail :: proc(obj: ^Obj) {
 		return
 	}
 
-	if is(obj, Pair) {
+	if o, ok := obj.(Pair); ok {
 		fmt.print(" ")
-		print_recurse(obj.type.(Pair).car)
-		print_list_tail(obj.type.(Pair).cdr)
+		print_recurse(o.car)
+		print_list_tail(o.cdr)
 	} else {
 		fmt.print(" . ")
 		print_recurse(obj)
@@ -351,27 +345,27 @@ print_recurse :: proc(obj: ^Obj) {
 		return
 	}
 
-	switch obj.tag {
-	case .TagNil: // do nothing
+	switch o in obj {
+	case Nil: // do nothing
 
-	case .TagAtom:
-		fmt.print(obj.type.(Atom))
+	case Atom:
+		fmt.print(o)
 
-	case .TagNumber:
-		fmt.print(obj.type.(Number))
+	case Number:
+		fmt.print(o)
 
-	case .TagPair:
+	case Pair:
 		fmt.print("(")
-		print_recurse(obj.type.(Pair).car)
-		print_list_tail(obj.type.(Pair).cdr)
+		print_recurse(o.car)
+		print_list_tail(o.cdr)
 
-	case .TagClosure:
+	case Closure:
 		fmt.print("CLOSURE<")
-		print_recurse(obj.type.(Closure).body)
-		fmt.printf(", %p>", obj.type.(Closure).env)
+		print_recurse(o.body)
+		fmt.printf(", %p>", o.env)
 
-	case .TagPrimitive:
-		fmt.printf("PRIM<%p>", obj.type.(Primitive))
+	case Primitive:
+		fmt.printf("PRIM<%p>", o)
 	}
 }
 
@@ -396,7 +390,7 @@ env_find :: proc(env, key: ^Obj) -> ^Obj {
 		}
 	}
 
-	failf("Failed to find key='%s' in environment", key.type.(Atom))
+	failf("Failed to find key='%s' in environment", key.(Atom))
 	return nil
 }
 
@@ -473,9 +467,9 @@ eval :: proc(expr: ^Obj, env: ^^Obj) {
 	if is(expr, Atom) {
 		val := env_find(env^, expr)
 		if is(val, Closure) {
-			compute(val.type.(Closure).body, val.type.(Closure).env)
+			compute(val.(Closure).body, val.(Closure).env)
 		} else if is(val, Primitive) {
-			val.type.(Primitive)(env)
+			val.(Primitive)(env)
 		} else {
 			push(val)
 		}
@@ -506,7 +500,7 @@ prim_cswap :: proc(_: ^^Obj) {
 		push(a);push(b)
 	}
 }
-prim_tag :: proc(_: ^^Obj) {a := pop();push(obj_new(i64(a.tag)))}
+prim_tag :: proc(_: ^^Obj) {a := pop();push(obj_new(i64(obj_tag(a))))}
 prim_read :: proc(_: ^^Obj) {push(read())}
 prim_print :: proc(_: ^^Obj) {a := pop();print(a)}
 
