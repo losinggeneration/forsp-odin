@@ -515,11 +515,17 @@ prim_rsh :: proc(_: ^^Obj) {b, a := pop(), pop();push(obj_new(obj_i64(a) >> uint
 
 when #config(USE_LOWLEVEL, false) {
 	// Low-level primitives
-	prim_ptr_state :: proc(_: ^^Obj) {}
-	prim_ptr_read :: proc(_: ^^Obj) {}
-	prim_ptr_write :: proc(_: ^^Obj) {}
-	prim_ptr_to_obj :: proc(_: ^^Obj) {}
-	prim_ptr_from_obj :: proc(_: ^^Obj) {}
+	prim_ptr_state :: proc(_: ^^Obj) {push(number_new(cast(i64)cast(uintptr)&state))}
+	prim_ptr_read :: proc(_: ^^Obj) {
+		a := cast(^i64)cast(uintptr)obj_i64(pop())
+		push(number_new(a^))
+	}
+	prim_ptr_write :: proc(_: ^^Obj) {
+		b, a := pop(), cast(^i64)cast(uintptr)obj_i64(pop())
+		a^ = obj_i64(b)
+	}
+	prim_ptr_to_obj :: proc(_: ^^Obj) {push(cast(^Obj)cast(uintptr)obj_i64(pop()))}
+	prim_ptr_from_obj :: proc(_: ^^Obj) {push(number_new(cast(i64)cast(uintptr)pop()))}
 }
 
 load_file :: proc(filename: string) -> (string, bool) {
