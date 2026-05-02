@@ -535,9 +535,9 @@ load_file :: proc(filename: string) -> (string, bool) {
 	}
 	defer os.close(file)
 
-	b, ok := os.read_entire_file_from_handle(file)
-	if !ok {
-		return "", ok
+	b, ferr := os.read_entire_file_from_file(file, context.temp_allocator)
+	if ferr != nil {
+		return "", false
 	}
 	defer delete(b)
 
